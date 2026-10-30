@@ -175,6 +175,9 @@ impl Game<'_> {
         if let Some(value) = self.events_command(&words, reply)? {
             return Ok(value);
         }
+        if let Some(value) = self.recipe_control(&words)? {
+            return Ok(Some(value));
+        }
         if let Some(value) = self.saves_control(&words, line, reply)? {
             return Ok(value);
         }
@@ -205,6 +208,7 @@ impl Game<'_> {
                 .chain(super::ui_control::HELP)
                 .chain(super::options::CONTROL_HELP)
                 .chain(super::events::HELP)
+                .chain(super::native_recipes::HELP)
                 .chain(super::saves_control::HELP)
                 .chain(super::pad::HELP)
                 .collect::<Vec<_>>() }))),
