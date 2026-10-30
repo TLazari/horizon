@@ -28,6 +28,7 @@ Every command `horizon-ctl` takes, its MCP tool in `horizon-ctl mcp` (the launch
 | `events [--since SEQ]` | `events` | What happened since SEQ, oldest first: screens, chat, deaths, respawns, items gained or lost, dimensions, worlds, hurts, low health, hunger, hostiles near, agent tasks ending | `--since` (integer): only events after this seq |
 | `subscribe [KIND...] [--since SEQ]` | CLI only | Stay connected and print each new event as it happens, one JSON line each | `--since` (integer): also send the events after this seq in the reply<br>`kinds` (text): event kinds to send (all without any) |
 | `event-options [--hostile-radius R] [--low-health H] [--low-food F]` | `event_options` | The thresholds of the hostile_near, low_health and hunger events | `--hostile-radius` (number): blocks, 1-128<br>`--low-health` (number): health points (20 is full)<br>`--low-food` (integer): food points, 0-20 |
+| `recipes [ITEM]` | `recipes` | The crafting recipes of the recipe book, or those making ITEM | `item` (string): the result, such as wooden_hoe or minecraft:bread |
 | `state` | `state` | Player, world, screen and crosshair target in one reply | none |
 | `looking-at` | `looking_at` | The block or entity under the crosshair | none |
 | `entities [RADIUS] [TYPE]` | `entities` | Mobs, dropped items and experience orbs near the player, nearest first | `radius` (number): search radius in blocks (default 32)<br>`type` (string): entity type filter |
@@ -59,6 +60,7 @@ Every command `horizon-ctl` takes, its MCP tool in `horizon-ctl mcp` (the launch
 
 | Command | MCP tool | What it does | Arguments |
 | --- | --- | --- | --- |
+| `place-recipe BOOK_ID [--all]` | `place_recipe` | Fill the open crafting grid from the recipe book | `book_id` (integer, required): the recipe's book_id from recipes<br>`--all` (boolean): as many as fit |
 | `break X Y Z [--timeout S]` | `break` | Mine a block, holding the attack button until it breaks | `x` (integer, required): block X<br>`y` (integer, required): block Y<br>`z` (integer, required): block Z<br>`--timeout` (number): give up after this many seconds (default 30) |
 | `place X Y Z [--item ITEM]` | `place` | Place the held item (or ITEM from the hotbar) at an empty position | `x` (integer, required): block X<br>`y` (integer, required): block Y<br>`z` (integer, required): block Z<br>`--item` (string): hotbar item to select first |
 | `interact X Y Z [FACE]` | `interact` | Right-click a block: open a chest or crafting table, press a button, open a door | `x` (integer, required): block X<br>`y` (integer, required): block Y<br>`z` (integer, required): block Z<br>`face` (down, up, north, south, west, east): which face to click |

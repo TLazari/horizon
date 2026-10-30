@@ -104,6 +104,18 @@ impl Game<'_> {
             }
             "click-slot" => {
                 let slot: usize = arg(1)?.parse()?;
+                // A slot the menu lacks would click an empty spot and look like success.
+                if !self.slots().contains(&slot) {
+                    let grid = if (100..109).contains(&slot) {
+                        format!(" (its crafting grid is {0}x{0})", self.craft_size)
+                    } else {
+                        String::new()
+                    };
+                    return Err(format!(
+                        "no slot {slot} in the open menu{grid}; screen lists its slot ids"
+                    )
+                    .into());
+                }
                 let (ox, oy) = self.gui_origin()?;
                 let (sx, sy) = self.slot_position(slot);
                 self.click_at(ox + sx + 8.0, oy + sy + 8.0, flag("right"), flag("shift"));

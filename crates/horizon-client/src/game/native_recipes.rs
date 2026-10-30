@@ -18,7 +18,23 @@ use horizon_client::{
     recipe_book::{Category, Display},
     stations::Smithing,
 };
+use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
+
+pub(super) const HELP: &[&str] = &[
+    "recipes [ITEM]                 the crafting recipes (book_id, result, count, grid 2|3, known, ingredients with their alternatives), or those making ITEM",
+    "place-recipe BOOK_ID [--all]   fill the open crafting grid from the recipe book, as clicking the recipe there does (--all: as many as fit)",
+];
+
+/// The smallest crafting grid a recipe fits: 2 (the inventory) or 3 (a
+/// crafting table).
+fn grid(r: &Recipe) -> u32 {
+    let fits = match r.kind {
+        RecipeKind::CraftingShaped => r.width <= 2 && r.height <= 2,
+        _ => r.slots.len() <= 4,
+    };
+    if fits { 2 } else { 3 }
+}
 
 /// The tables, made once, and the recipe book's known displays with the
 /// book's version they are of.
@@ -99,6 +115,73 @@ impl Game<'_> {
         }
         self.mod_give(item, count.clamp(1, 99), "");
         Ok(())
+    }
+    /// `recipes` and `place-recipe`; None for other commands.
+    pub(super) fn recipe_control(
+        &mut self,
+        words: &[&str],
+    ) -> horizon_client::Result<Option<Value>> {
+        match words[0] {
+            "recipes" => {
+                let want = words.get(1).map(|w| {
+                    if w.contains(':') {
+                        (*w).to_owned()
+                    } else {
+                        format!("minecraft:{w}")
+                    }
+                });
+                let tables = self
+                    .made_recipes()
+                    .ok_or("the recipes are not loaded yet; open a world first")?;
+                let known = self.known_displays();
+                let item = |s: &RecipeStack| tables.items[s.item as usize].id.clone();
+                let recipes: Vec<Value> = tables
+                    .recipes
+                    .iter()
+                    .filter(|r| {
+                        matches!(
+                            r.kind,
+                            RecipeKind::CraftingShaped | RecipeKind::CraftingShapeless
+                        )
+                    })
+                    .filter_map(|r| {
+                        let result = r.results.first()?;
+                        if want.as_ref().is_some_and(|w| *w != item(result)) {
+                            return None;
+                        }
+                        let ingredients: Vec<Vec<String>> = r
+                            .slots
+                            .iter()
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.iter().map(item).collect())
+                            .collect();
+                        let mut v = json!({
+                            "id": r.id, "book_id": r.book_id, "result": item(result),
+                            "count": result.count, "grid": grid(r),
+                            "known": known.contains(&r.book_id), "ingredients": ingredients,
+                        });
+                        if matches!(r.kind, RecipeKind::CraftingShaped) {
+                            v["width"] = r.width.into();
+                            v["height"] = r.height.into();
+                        }
+                        Some(v)
+                    })
+                    .collect();
+                Ok(Some(json!({ "recipes": recipes })))
+            }
+            "place-recipe" => {
+                let usage = "place-recipe BOOK_ID [--all]";
+                let book_id: i32 = words.get(1).and_then(|w| w.parse().ok()).ok_or(usage)?;
+                let all = match words.get(2..) {
+                    Some([]) | None => false,
+                    Some(["--all"]) => true,
+                    _ => return Err(usage.into()),
+                };
+                self.recipe_place(book_id, all)?;
+                Ok(Some(json!({ "ok": true, "book_id": book_id, "all": all })))
+            }
+            _ => Ok(None),
+        }
     }
     /// `native_place_recipe`: refused as `recipes.place` refuses it.
     pub(super) fn recipe_place(&mut self, book_id: i32, all: bool) -> Result<(), String> {
