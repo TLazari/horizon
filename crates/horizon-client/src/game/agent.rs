@@ -211,6 +211,13 @@ fn delta(before: &BTreeMap<String, i64>, after: &BTreeMap<String, i64>) -> BTree
 /// A feet position the A* path walks through.
 type Node = [i32; 3];
 
+/// Doors, fence gates and trapdoors a hand opens: all but the iron ones,
+/// which take redstone.
+fn opens_by_hand(name: &str) -> bool {
+    (name.ends_with("_door") || name.ends_with("_trapdoor") || name.ends_with("_fence_gate"))
+        && !name.contains("iron_")
+}
+
 enum TaskKind {
     /// Hold keys until a deadline.
     Move {
@@ -260,6 +267,8 @@ struct Goto {
     replans: u32,
     jump_until: u64,
     warning: Option<String>,
+    /// The last door, gate or trapdoor clicked open, and when.
+    opened: Option<([i32; 3], u64)>,
 }
 struct Break {
     pos: [i32; 3],
@@ -771,6 +780,21 @@ impl Game<'_> {
             .get(self.world.block(pos[0], pos[1], pos[2]));
         f.full_collision || f.legacy_solid
     }
+    /// Whether the body can't go through a block: what stops motion, less the
+    /// doors, fence gates and trapdoors a hand opens (`goto` opens them).
+    fn blocks_body(&self, pos: [i32; 3]) -> bool {
+        self.blocks_motion(pos) && self.hand_opened(pos).is_none()
+    }
+    /// `Some(open)` for a door, fence gate or trapdoor a hand opens.
+    fn hand_opened(&self, pos: [i32; 3]) -> Option<bool> {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        if !opens_by_hand(&self.res.facts().get(state).name) {
+            return None;
+        }
+        let s = self.pack.assets.registry.state(state)?;
+        let open = s.properties.iter().find(|(k, _)| k.as_str() == "open")?;
+        Some(open.1.as_str() == "true")
+    }
     fn walkable(&self, n: Node) -> bool {
         let below = self.world.block(n[0], n[1] - 1, n[2]);
         let lava = |p: [i32; 3]| {
@@ -784,8 +808,8 @@ impl Game<'_> {
         self.world.chunks.contains_key(&(n[0] >> 4, n[2] >> 4))
             && (self.blocks_motion([n[0], n[1] - 1, n[2]])
                 || self.res.facts().get(below).fluid != horizon_client::blocks::Fluid::None)
-            && !self.blocks_motion(n)
-            && !self.blocks_motion([n[0], n[1] + 1, n[2]])
+            && !self.blocks_body(n)
+            && !self.blocks_body([n[0], n[1] + 1, n[2]])
             && !lava(n)
             && !lava([n[0], n[1] - 1, n[2]])
     }
@@ -835,10 +859,8 @@ impl Game<'_> {
                     // A step up needs head room above the start; a drop needs
                     // the column in front clear down to the landing.
                     let clear = match dy {
-                        1 => !self.blocks_motion([n[0], n[1] + 2, n[2]]),
-                        d if d < 0 => {
-                            (m[1]..=n[1] + 1).all(|y| !self.blocks_motion([m[0], y, m[2]]))
-                        }
+                        1 => !self.blocks_body([n[0], n[1] + 2, n[2]]),
+                        d if d < 0 => (m[1]..=n[1] + 1).all(|y| !self.blocks_body([m[0], y, m[2]])),
                         _ => true,
                     };
                     if !clear || !self.walkable(m) {
@@ -1218,6 +1240,7 @@ impl Game<'_> {
                     replans: 0,
                     jump_until: 0,
                     warning,
+                    opened: None,
                 };
                 self.start_task("goto", TaskKind::Goto(Box::new(goto)), reply, timeout)
             }
@@ -2027,6 +2050,33 @@ impl Game<'_> {
             aim = c;
             break;
         }
+        // A closed door, gate or trapdoor on the next node: stop and open it,
+        // as `interact` does. A second click before the first shows would
+        // close it again.
+        if let Some(&n) = g.path.get(g.next) {
+            let c = [
+                f64::from(n[0]) + 0.5,
+                f64::from(n[1]),
+                f64::from(n[2]) + 0.5,
+            ];
+            for pos in [n, [n[0], n[1] + 1, n[2]]] {
+                let waited = g
+                    .opened
+                    .is_none_or(|(at, tick)| at != pos || self.ticks > tick + 10);
+                if horizontal(p, c) < 2.5
+                    && self.hand_opened(pos) == Some(false)
+                    && waited
+                    && self.aim_block(pos, None).is_ok()
+                {
+                    self.keys.remove(&KeyCode::KeyW);
+                    let _ = self.agent_mouse(MouseButton::Right, true);
+                    let _ = self.agent_mouse(MouseButton::Right, false);
+                    g.opened = Some((pos, self.ticks));
+                    g.progress_tick = self.ticks;
+                    return None;
+                }
+            }
+        }
         // Stuck: jump, then replan from here.
         let stalled = self.ticks.saturating_sub(g.progress_tick);
         if stalled > 60 && on_ground {
@@ -2194,6 +2244,26 @@ mod tests {
         assert!((yaw - 90.0).abs() < 1e-4);
         let (_, pitch) = yaw_pitch([0.0; 3], [0.0, -1.0, 0.0]);
         assert!((pitch - 90.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn hand_opens_wooden_doors_gates_and_trapdoors() {
+        for name in [
+            "minecraft:oak_door",
+            "minecraft:copper_door",
+            "minecraft:spruce_fence_gate",
+            "minecraft:birch_trapdoor",
+        ] {
+            assert!(opens_by_hand(name), "{name}");
+        }
+        for name in [
+            "minecraft:iron_door",
+            "minecraft:iron_trapdoor",
+            "minecraft:oak_fence",
+            "minecraft:stone",
+        ] {
+            assert!(!opens_by_hand(name), "{name}");
+        }
     }
 
     #[test]
