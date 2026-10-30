@@ -2600,6 +2600,7 @@ impl Game<'_> {
             // (sent to the player itself): its own moves never hurt it.
             C::DamageEvent(p) => {
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+                    self.note_damage(p.source_type, p.cause, p.direct);
                     if let Some(pl) = self.player.as_mut() {
                         pl.health.animate_hurt();
                     }

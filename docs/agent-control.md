@@ -265,7 +265,18 @@ turn the switch off.
 - `wait-for screen NAME|widget ID|loaded|chat TEXT|event KIND [--timeout S] [--since SEQ]`
   replies when the condition holds, or with `kind: timeout`.
 - `events [--since SEQ]` returns what happened since SEQ: screens, chat, deaths, respawns, items,
-  dimensions and worlds (the newest 256). Take `last` before an action, and wait with `--since`,
+  dimensions and worlds (the newest 256). For an agent's reflexes and executor too:
+  - `hurt`: `amount` (health lost; absorption not counted), `health`, and `source` from the
+    server's damage report (`damage_type`, the causing entity's `id` and `type`, `direct` and
+    `direct_type`), null when none came;
+  - `low_health` and `hunger`: once when health or food drops below the threshold;
+  - `hostile_near`: `id`, `type`, `distance`, `pos`, once when a monster comes within the radius
+    (it leaves 2 blocks past it);
+  - `task_done` and `task_failed`: `task`, `reason` (failed), and the task's `reply`, when an agent
+    task (`goto`, `break`, `place`, `interact`, `attack`, `wait`...) ends, `stop` included.
+
+  `event-options [--hostile-radius R] [--low-health H] [--low-food F]` sets the thresholds
+  (16 blocks, 6, 6). These events report; the game never acts on them. Take `last` before an action, and wait with `--since`,
   so the action's event can't slip in before the wait.
 - `subscribe [KIND...] [--since SEQ]` keeps the connection and pushes each new event (of these
   kinds; all without any) as one JSON line, as it happens. Event lines carry `event`, `seq` and

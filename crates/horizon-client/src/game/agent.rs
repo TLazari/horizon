@@ -1696,9 +1696,9 @@ impl Game<'_> {
             }
             "stop" => {
                 let cancelled = self.agent.task.take().map(|t| {
-                    let _ = t.reply.send(
-                        json!({ "error": "cancelled by stop", "cancelled": true }).to_string(),
-                    );
+                    let reply = json!({ "error": "cancelled by stop", "cancelled": true });
+                    self.events.task_ended(self.ticks, t.name, &reply);
+                    let _ = t.reply.send(reply.to_string());
                     t.name
                 });
                 let turning = self.agent.glide.take().map(|g| {
@@ -1842,6 +1842,7 @@ impl Game<'_> {
                 if task.kind.releases_input() {
                     self.release_agent_keys();
                 }
+                self.events.task_ended(self.ticks, task.name, &value);
                 let _ = task.reply.send(value.to_string());
             }
             None => self.agent.task = Some(task),
