@@ -26,6 +26,7 @@ Every command `horizon-ctl` takes, its MCP tool in `horizon-ctl mcp` (the launch
 | Command | MCP tool | What it does | Arguments |
 | --- | --- | --- | --- |
 | `events [--since SEQ]` | `events` | What happened since SEQ, oldest first: screens, chat, deaths, respawns, items gained or lost, dimensions, worlds | `--since` (integer): only events after this seq |
+| `subscribe [KIND...] [--since SEQ]` | CLI only | Stay connected and print each new event as it happens, one JSON line each | `--since` (integer): also send the events after this seq in the reply<br>`kinds` (text): event kinds to send (all without any) |
 | `state` | `state` | Player, world, screen and crosshair target in one reply | none |
 | `looking-at` | `looking_at` | The block or entity under the crosshair | none |
 | `entities [RADIUS] [TYPE]` | `entities` | Mobs, dropped items and experience orbs near the player, nearest first | `radius` (number): search radius in blocks (default 32)<br>`type` (string): entity type filter |

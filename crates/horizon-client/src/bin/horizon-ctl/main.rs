@@ -213,6 +213,19 @@ impl Session {
                 self.game(&format!("key {key} up"))
             }
             "logs" => logs(&self.home, &words[1..]),
+            "subscribe" => {
+                let reply = self.game(&words.join(" "))?;
+                println!("{reply}");
+                let reader = &mut self.client()?.reader;
+                let mut line = String::new();
+                // Each event as it comes; a --timeout ends the wait.
+                while reader.read_line(&mut line).is_ok_and(|n| n > 0) {
+                    print!("{line}");
+                    let _ = std::io::stdout().flush();
+                    line.clear();
+                }
+                Err(Failure::unreachable("the game closed the connection"))
+            }
             "wait-ready" => {
                 let limit = if words.len() > 1 {
                     number(1, "SECONDS")?

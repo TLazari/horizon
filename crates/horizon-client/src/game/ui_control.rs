@@ -134,6 +134,7 @@ impl Game<'_> {
             self.ui_wait.waiting.push(Request {
                 line: line.to_owned(),
                 reply: reply.clone(),
+                push: None,
             });
             return Ok(Handled::Deferred);
         }

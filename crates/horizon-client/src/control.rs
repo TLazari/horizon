@@ -15,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     },
     thread,
@@ -149,6 +149,17 @@ fn same_token(a: &str, b: &str) -> bool {
 pub struct Request {
     pub line: String,
     pub reply: mpsc::Sender<String>,
+    /// The connection's own lines, for what the game sends unasked
+    /// (`subscribe`); None for commands from inside the process.
+    pub push: Option<Push>,
+}
+
+/// A connection's own lines: what the game sends it unasked (`subscribe`).
+#[derive(Clone)]
+pub struct Push {
+    /// Tells connections apart (each gets a new number).
+    pub connection: u64,
+    pub out: mpsc::Sender<String>,
 }
 
 pub struct Server {
@@ -345,20 +356,40 @@ fn serve(stream: Stream, sender: &mpsc::Sender<Request>) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
+    static CONNECTIONS: AtomicU64 = AtomicU64::new(0);
+    let connection = CONNECTIONS.fetch_add(1, Ordering::Relaxed);
+    // Replies and pushed events share one writer, so lines never interleave.
+    let (out, lines) = mpsc::channel::<String>();
+    let spawned = thread::Builder::new()
+        .name("horizon-control-writer".into())
+        .spawn(move || {
+            for text in lines {
+                if writeln!(writer, "{text}").is_err() {
+                    return;
+                }
+            }
+        });
+    if spawned.is_err() {
+        return;
+    }
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { return };
         if line.trim().is_empty() {
             continue;
         }
         let (reply, response) = mpsc::channel();
-        if sender.send(Request { line, reply }).is_err() {
+        let push = Some(Push {
+            connection,
+            out: out.clone(),
+        });
+        if sender.send(Request { line, reply, push }).is_err() {
             return;
         }
         // The game dropping the reply sender means it exited mid-command.
         let text = response
             .recv()
             .unwrap_or_else(|_| r#"{"error":"game exited"}"#.to_owned());
-        if writeln!(writer, "{text}").is_err() {
+        if out.send(text).is_err() {
             return;
         }
     }
@@ -385,9 +416,18 @@ mod tests {
         };
         assert_eq!(request.line, "status");
         request.reply.send(r#"{"ok":true}"#.into()).unwrap();
+        let mut reader = BufReader::new(client);
         let mut reply = String::new();
-        BufReader::new(client).read_line(&mut reply).unwrap();
+        reader.read_line(&mut reply).unwrap();
         assert_eq!(reply.trim(), r#"{"ok":true}"#);
+        // What the game pushes later arrives on the same connection.
+        let push = request
+            .push
+            .expect("a socket request carries its connection");
+        push.out.send(r#"{"event":"death"}"#.into()).unwrap();
+        reply.clear();
+        reader.read_line(&mut reply).unwrap();
+        assert_eq!(reply.trim(), r#"{"event":"death"}"#);
         drop(server);
         assert!(!path.exists());
     }

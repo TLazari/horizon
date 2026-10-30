@@ -119,6 +119,7 @@ passes on without checking it).
 | Screenshots | (all) | yes | yes | yes | yes | PNG of the next frame, `--offscreen` too |
 | F3 data | F3 | yes | part | yes | yes | `key f3`; `status` (renderer, chunks, memory) was CLI-only |
 | Waits and events | (all) | yes | yes | yes | yes | `wait`, `wait-for`, `events` |
+| Events as a stream | (all) | no | no | yes | no | `subscribe`, `unsubscribe`; MCP replies once per call |
 | Effects, experience, enchantments, potions, fill | (cheats) | part | no | yes | yes | `effect`, `effects`, `xp`, `enchant`, `potion`, `fill` |
 | Benchmarks and frame stats | (all) | yes | part | yes | yes | `bench`, `stats` were CLI-only; `fly` |
 
@@ -266,6 +267,13 @@ turn the switch off.
 - `events [--since SEQ]` returns what happened since SEQ: screens, chat, deaths, respawns, items,
   dimensions and worlds (the newest 256). Take `last` before an action, and wait with `--since`,
   so the action's event can't slip in before the wait.
+- `subscribe [KIND...] [--since SEQ]` keeps the connection and pushes each new event (of these
+  kinds; all without any) as one JSON line, as it happens. Event lines carry `event`, `seq` and
+  `tick`; replies carry `ok` or `error`, so a client can keep sending commands on the same
+  connection and tell the two apart. The reply holds the events since `--since SEQ`, so nothing
+  falls between `events` and the stream; an event of the same turn can arrive before it.
+  `subscribe` again changes the kinds, `unsubscribe` stops; closing the connection ends it too.
+  `horizon-ctl subscribe` prints the lines until the game closes.
 
 ## Tests
 
@@ -291,7 +299,6 @@ These are tracked in FEATURES.md (LATER):
 - Horizon's own option files by key (`horizon-graphics.txt`, controller, extras) next to
   `options-get` and `options-set`.
 - Adding and removing saved servers by command.
-- `subscribe`: events as a stream on one connection.
 - Launcher window screenshots in this page's PRs.
 - No AI changed in the launcher while a game is open: the game rewrites its extras when it saves.
 - A confirmation question in the launcher CLI for destructive commands.

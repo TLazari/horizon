@@ -2,7 +2,7 @@
 //! state is compared once per event loop turn, after the game ran, so watching never changes
 //! what the game does.
 use super::Game;
-use horizon_client::Result;
+use horizon_client::{Result, control::Push};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -13,6 +13,8 @@ use std::{
 pub(super) const HELP: &[&str] = &[
     "events [--since SEQ]           what happened (screen, chat, death, respawn, item, dimension, world), oldest first",
     "wait-for screen NAME|widget ID|loaded|chat TEXT|event KIND [--timeout S] [--since SEQ]  reply once it holds (default 30 s; chat and event count from SEQ, else from now)",
+    "subscribe [KIND...] [--since SEQ]  push each new event (of these kinds) on this connection as a line with \"event\"; replies keep \"ok\"/\"error\"",
+    "unsubscribe                    stop pushing events on this connection",
 ];
 
 /// Events kept for `events`.
@@ -36,6 +38,18 @@ enum Condition {
     Event(String),
 }
 
+/// A connection that gets each new event as a line (`subscribe`).
+struct Subscriber {
+    /// Event kinds to send; empty for all.
+    kinds: Vec<String>,
+    push: Push,
+}
+impl Subscriber {
+    fn wants(&self, event: &Value) -> bool {
+        self.kinds.is_empty() || self.kinds.iter().any(|k| event["event"] == **k)
+    }
+}
+
 struct Wait {
     condition: Condition,
     /// The event sequence number when the wait started.
@@ -52,6 +66,7 @@ pub(super) struct Events {
     log: VecDeque<Value>,
     last: Option<Snapshot>,
     waits: Vec<Wait>,
+    subscribers: Vec<Subscriber>,
 }
 
 impl Events {
@@ -62,7 +77,27 @@ impl Events {
         if self.log.len() == KEPT {
             self.log.pop_front();
         }
+        if !self.subscribers.is_empty() {
+            let line = event.to_string();
+            // A closed connection drops its subscription.
+            self.subscribers
+                .retain(|s| !s.wants(&event) || s.push.out.send(line.clone()).is_ok());
+        }
         self.log.push_back(event);
+    }
+    /// Subscribe a connection, or change the kinds it gets.
+    fn subscribe(&mut self, kinds: Vec<String>, push: &Push) {
+        self.unsubscribe(push);
+        self.subscribers.push(Subscriber {
+            kinds,
+            push: push.clone(),
+        });
+    }
+    fn unsubscribe(&mut self, push: &Push) -> bool {
+        let before = self.subscribers.len();
+        self.subscribers
+            .retain(|s| s.push.connection != push.connection);
+        self.subscribers.len() < before
     }
     fn since(&self, seq: u64) -> impl Iterator<Item = &Value> {
         self.log
@@ -108,6 +143,24 @@ fn diff(before: &Snapshot, now: &Snapshot, chat: &[String]) -> Vec<Value> {
         }
     }
     out
+}
+
+/// The kinds and `--since` of `subscribe`.
+fn parse_subscribe(words: &[&str]) -> Result<(Vec<String>, Option<u64>)> {
+    let mut kinds = Vec::new();
+    let mut since = None;
+    let mut words = words.iter();
+    while let Some(&w) = words.next() {
+        if w == "--since" {
+            let seq = words.next().and_then(|t| t.parse::<u64>().ok());
+            since = Some(seq.ok_or("--since takes an event seq")?);
+        } else if w.starts_with("--") {
+            return Err("subscribe [KIND...] [--since SEQ]".into());
+        } else {
+            kinds.push(w.to_owned());
+        }
+    }
+    Ok((kinds, since))
 }
 
 /// The condition, the timeout and `--since`.
@@ -247,13 +300,35 @@ impl Game<'_> {
         }
     }
 
-    /// `events` and `wait-for`; None for other commands, Some(None) when deferred.
+    /// `events`, `wait-for`, `subscribe` and `unsubscribe`; None for other
+    /// commands, Some(None) when deferred. `push` is the connection's own lines.
     pub(super) fn events_command(
         &mut self,
         words: &[&str],
         reply: &Sender<String>,
+        push: Option<&Push>,
     ) -> Result<Option<Option<Value>>> {
         match words[0] {
+            "subscribe" => {
+                let out = push.ok_or("subscribe needs a connection to the control socket")?;
+                let (kinds, since) = parse_subscribe(&words[1..])?;
+                // What happened since SEQ comes in the reply, so nothing is missed.
+                let missed: Vec<&Value> = since
+                    .map(|seq| {
+                        self.events
+                            .since(seq)
+                            .filter(|e| kinds.is_empty() || kinds.iter().any(|k| e["event"] == **k))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let value = json!({ "ok": true, "kinds": kinds, "events": missed, "last": self.events.seq });
+                self.events.subscribe(kinds, out);
+                Ok(Some(Some(value)))
+            }
+            "unsubscribe" => {
+                let was = push.is_some_and(|out| self.events.unsubscribe(out));
+                Ok(Some(Some(json!({ "ok": true, "was_subscribed": was }))))
+            }
             "events" => {
                 let since = match words.get(1..) {
                     Some(["--since", n]) => n.parse().map_err(|_| "--since takes a number")?,
@@ -335,6 +410,43 @@ mod tests {
         assert_eq!(e.log.len(), KEPT);
         assert_eq!(e.since(295).count(), 5);
         assert_eq!(e.since(0).next().unwrap()["seq"], 45);
+    }
+
+    #[test]
+    fn subscribers_get_the_kinds_they_asked_for() {
+        let mut e = Events::default();
+        let push = |connection| {
+            let (out, lines) = std::sync::mpsc::channel();
+            (Push { connection, out }, lines)
+        };
+        let (all, all_lines) = push(1);
+        let (deaths, death_lines) = push(2);
+        e.subscribe(Vec::new(), &all);
+        e.subscribe(vec!["death".into()], &deaths);
+        e.push(1, json!({ "event": "chat", "text": "hi" }));
+        e.push(2, json!({ "event": "death" }));
+        assert_eq!(all_lines.try_iter().count(), 2);
+        let got: Vec<Value> = death_lines
+            .try_iter()
+            .map(|l| serde_json::from_str(&l).unwrap())
+            .collect();
+        assert_eq!(got.len(), 1);
+        assert_eq!(
+            (got[0]["event"].as_str(), got[0]["seq"].as_u64()),
+            (Some("death"), Some(2))
+        );
+        // Subscribing again replaces the kinds; a closed connection is dropped.
+        e.subscribe(vec!["chat".into()], &deaths);
+        assert_eq!(e.subscribers.len(), 2);
+        drop(all_lines);
+        e.push(3, json!({ "event": "chat" }));
+        assert_eq!(e.subscribers.len(), 1);
+        assert!(e.unsubscribe(&deaths) && !e.unsubscribe(&deaths));
+        assert_eq!(
+            parse_subscribe(&["death", "--since", "4", "hurt"]).unwrap(),
+            (vec!["death".to_owned(), "hurt".to_owned()], Some(4))
+        );
+        assert!(parse_subscribe(&["--since"]).is_err());
     }
 
     #[test]

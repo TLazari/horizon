@@ -138,7 +138,12 @@ impl Game<'_> {
     }
 
     fn answer(&mut self, request: horizon_client::control::Request, event_loop: &ActiveEventLoop) {
-        let reply = match self.control_command(&request.line, &request.reply, event_loop) {
+        let reply = match self.control_command(
+            &request.line,
+            &request.reply,
+            request.push.as_ref(),
+            event_loop,
+        ) {
             Ok(Some(value)) => value,
             // Deferred: the command keeps its own reply channel.
             Ok(None) => return,
@@ -151,6 +156,7 @@ impl Game<'_> {
         &mut self,
         line: &str,
         reply: &Sender<String>,
+        push: Option<&horizon_client::control::Push>,
         event_loop: &ActiveEventLoop,
     ) -> Result<Option<Value>> {
         let words: Vec<&str> = line.split_whitespace().collect();
@@ -172,7 +178,7 @@ impl Game<'_> {
             super::agent::Handled::Deferred => return Ok(None),
             super::agent::Handled::No => {}
         }
-        if let Some(value) = self.events_command(&words, reply)? {
+        if let Some(value) = self.events_command(&words, reply, push)? {
             return Ok(value);
         }
         if let Some(value) = self.saves_control(&words, line, reply)? {

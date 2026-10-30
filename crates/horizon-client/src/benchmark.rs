@@ -99,6 +99,7 @@ impl Control {
             .send(Request {
                 line: line.to_owned(),
                 reply,
+                push: None,
             })
             .map_err(|_| "the game has exited".to_owned())?;
         // Flights and loads reply when they finish.
