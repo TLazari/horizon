@@ -221,6 +221,10 @@ impl Game<'_> {
                 ok()
             }
             "close" => {
+                // DeathScreen can't be escaped: the player stays dead until respawning.
+                if self.screen == Screen::Dead {
+                    return Err("the death screen can't be closed; use respawn".into());
+                }
                 self.close_container();
                 self.screen = Screen::Playing;
                 self.capture(true);

@@ -782,7 +782,14 @@ impl Game<'_> {
                 ok()
             }
             "respawn" => {
-                if self.remote.is_none() || self.screen != Screen::Dead {
+                // A dead player whose death screen went away (closed by an
+                // older `close`) can still respawn.
+                let dead = self.screen == Screen::Dead
+                    || self
+                        .player
+                        .as_ref()
+                        .is_some_and(|p| p.health.health() <= 0.0);
+                if self.remote.is_none() || !dead {
                     return Err("respawn needs the death screen on a server".into());
                 }
                 self.remote_respawn();
