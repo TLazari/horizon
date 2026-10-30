@@ -104,6 +104,12 @@ impl Game<'_> {
             }
             "click-slot" => {
                 let slot: usize = arg(1)?.parse()?;
+                // With no menu open the click lands outside one: a carried stack is thrown.
+                if matches!(self.screen, Screen::Playing | Screen::Paused | Screen::Dead) {
+                    return Err(
+                        "no menu is open; open-inventory or interact with a container first".into(),
+                    );
+                }
                 // A slot the menu lacks would click an empty spot and look like success.
                 if !self.slots().contains(&slot) {
                     let grid = if (100..109).contains(&slot) {
