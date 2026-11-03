@@ -78,7 +78,11 @@ impl Game<'_> {
 
     /// An agent's command arrived.
     pub(super) fn agent_command_seen(&mut self) {
-        self.agent_last = Some(std::time::Instant::now());
+        let now = std::time::Instant::now();
+        self.agent_last = Some(now);
+        // An agent playing is input: without it the idle frame limit (10 fps
+        // after a while) would hold every command a frame of 100 ms.
+        self.last_input = now;
     }
 
     /// The AI Agent page's lines: the state, then where agents connect.
