@@ -16,6 +16,7 @@ pub(super) const HELP: &[&str] = &[
     "wait-for screen NAME|widget ID|loaded|chat TEXT|event KIND [--timeout S] [--since SEQ]  reply once it holds (default 30 s; chat and event count from SEQ, else from now)",
     "subscribe [KIND...] [--since SEQ]  push each new event (of these kinds) on this connection as a line with \"event\"; replies keep \"ok\"/\"error\"",
     "unsubscribe                    stop pushing events on this connection",
+    "sounds [--seconds S] [--radius R]  the sounds heard lately (default 5 s, 32 blocks): sound (entity.zombie.ambient), pos, distance, ago_ms",
 ];
 
 /// Events kept for `events`.
@@ -478,6 +479,31 @@ impl Game<'_> {
                     "low_food": o.low_food,
                 }))))
             }
+            "sounds" => {
+                let (seconds, radius) = parse_sounds(&words[1..])?;
+                let me = self.audio.listener;
+                let now = Instant::now();
+                let sounds: Vec<Value> = self
+                    .subtitles
+                    .heard
+                    .iter()
+                    .filter(|(t, _)| now.duration_since(*t).as_secs_f64() <= seconds)
+                    .filter_map(|(t, h)| {
+                        let at = h.at?;
+                        let d = ((at[0] - me[0]).powi(2) + (at[1] - me[1]).powi(2) + (at[2] - me[2]).powi(2)).sqrt();
+                        (d <= radius).then(|| {
+                            json!({
+                                // subtitles.entity.zombie.ambient -> entity.zombie.ambient
+                                "sound": h.subtitle.strip_prefix("subtitles.").unwrap_or(&h.subtitle),
+                                "pos": at,
+                                "distance": (d * 10.0).round() / 10.0,
+                                "ago_ms": now.duration_since(*t).as_millis() as u64,
+                            })
+                        })
+                    })
+                    .collect();
+                Ok(Some(Some(json!({ "sounds": sounds, "listener": me }))))
+            }
             "unsubscribe" => {
                 let was = push.is_some_and(|out| self.events.unsubscribe(out));
                 Ok(Some(Some(json!({ "ok": true, "was_subscribed": was }))))
@@ -510,9 +536,41 @@ impl Game<'_> {
     }
 }
 
+/// `sounds [--seconds S] [--radius R]`: how far back (default 5, at most what is
+/// kept) and how far away (default 32 blocks).
+fn parse_sounds(words: &[&str]) -> Result<(f64, f64)> {
+    let (mut seconds, mut radius) = (5.0, 32.0);
+    let mut it = words.iter();
+    while let Some(w) = it.next() {
+        let value = it
+            .next()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| *v > 0.0);
+        match (*w, value) {
+            ("--seconds", Some(v)) => {
+                seconds = v.min(super::subtitle_hud::HEARD_KEPT.as_secs_f64())
+            }
+            ("--radius", Some(v)) => radius = v,
+            _ => return Err("sounds [--seconds S] [--radius R]".into()),
+        }
+    }
+    Ok((seconds, radius))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sounds_options() {
+        assert_eq!(parse_sounds(&[]).unwrap(), (5.0, 32.0));
+        assert_eq!(
+            parse_sounds(&["--seconds", "10", "--radius", "16"]).unwrap(),
+            (10.0, 16.0)
+        );
+        assert_eq!(parse_sounds(&["--seconds", "999"]).unwrap().0, 30.0);
+        assert!(parse_sounds(&["--radius"]).is_err());
+    }
 
     fn snap(screen: &'static str, chat: u64, logs: i64) -> Snapshot {
         Snapshot {
