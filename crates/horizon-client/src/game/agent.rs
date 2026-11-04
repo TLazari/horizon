@@ -256,6 +256,8 @@ impl TaskKind {
         !matches!(self, TaskKind::Wait { .. })
     }
 }
+/// The most a goto turns the view in one tick, in degrees.
+const TURN_PER_TICK: f32 = 30.0;
 struct Goto {
     target: [f64; 3],
     near: f64,
@@ -269,6 +271,9 @@ struct Goto {
     warning: Option<String>,
     /// The last door, gate or trapdoor clicked open, and when.
     opened: Option<([i32; 3], u64)>,
+    /// Nodes found unreachable while swimming (a bank too high to climb
+    /// out of the water): later replans route around them.
+    avoid: Vec<Node>,
 }
 struct Break {
     pos: [i32; 3],
@@ -814,7 +819,13 @@ impl Game<'_> {
             && !lava([n[0], n[1] - 1, n[2]])
     }
     /// A* over standable feet positions: steps up one block, drops up to three.
-    fn find_path(&self, from: Node, goal: [f64; 3], near: f64) -> Option<Vec<Node>> {
+    fn find_path(
+        &self,
+        from: Node,
+        goal: [f64; 3],
+        near: f64,
+        avoid: &[Node],
+    ) -> Option<Vec<Node>> {
         use std::{cmp::Reverse, collections::BinaryHeap};
         let reached = |n: Node| {
             let c = [
@@ -863,7 +874,7 @@ impl Game<'_> {
                         d if d < 0 => (m[1]..=n[1] + 1).all(|y| !self.blocks_body([m[0], y, m[2]])),
                         _ => true,
                     };
-                    if !clear || !self.walkable(m) {
+                    if !clear || !self.walkable(m) || avoid.contains(&m) {
                         continue;
                     }
                     let water = self
@@ -1217,7 +1228,7 @@ impl Game<'_> {
                 let timeout = a.num("timeout", 60.0)?;
                 let p = self.player.as_ref().ok_or("no player")?.position;
                 let from = [p.x.floor() as i32, p.y.round() as i32, p.z.floor() as i32];
-                let (path, warning) = match self.find_path(from, target, near) {
+                let (path, warning) = match self.find_path(from, target, near, &[]) {
                     Some(path) => (path, None),
                     None if a.has("direct") => (
                         Vec::new(),
@@ -1241,6 +1252,7 @@ impl Game<'_> {
                     jump_until: 0,
                     warning,
                     opened: None,
+                    avoid: Vec::new(),
                 };
                 self.start_task("goto", TaskKind::Goto(Box::new(goto)), reply, timeout)
             }
@@ -2078,8 +2090,36 @@ impl Game<'_> {
                 }
             }
         }
+        let in_water = {
+            let b = p.map(|v| v.floor() as i32);
+            self.res
+                .facts()
+                .get(self.world.block(b[0], b[1], b[2]))
+                .fluid
+                != horizon_client::blocks::Fluid::None
+        };
         // Stuck: jump, then replan from here.
         let stalled = self.ticks.saturating_sub(g.progress_tick);
+        // Swimming against a bank too high to climb out: the same node would
+        // be chosen again. Mark it and replan at once, around it.
+        if in_water && stalled > 40 && g.replans < 6 {
+            if let Some(&n) = g.path.get(g.next)
+                && !g.avoid.contains(&n)
+            {
+                g.avoid.push(n);
+            }
+            g.replans += 1;
+            let from = [
+                p[0].floor() as i32,
+                p[1].round() as i32,
+                p[2].floor() as i32,
+            ];
+            if let Some(path) = self.find_path(from, g.target, g.near, &g.avoid) {
+                g.path = path;
+                g.next = 1;
+            }
+            g.progress_tick = self.ticks;
+        }
         if stalled > 60 && on_ground {
             g.jump_until = self.ticks + 4;
         }
@@ -2096,29 +2136,26 @@ impl Game<'_> {
                 p[1].round() as i32,
                 p[2].floor() as i32,
             ];
-            if let Some(path) = self.find_path(from, g.target, g.near) {
+            if let Some(path) = self.find_path(from, g.target, g.near, &g.avoid) {
                 g.path = path;
                 g.next = 1;
             }
             g.progress_tick = self.ticks;
         }
         let d = [aim[0] - p[0], aim[2] - p[2]];
-        if d[0].abs() + d[1].abs() > 1e-3 {
-            self.yaw = (-d[0]).atan2(d[1]).to_degrees() as f32;
+        // On top of the waypoint the direction flips with every overshoot,
+        // and the view swung side to side: keep the heading there, and turn
+        // at most TURN_PER_TICK degrees a tick elsewhere, as a player would.
+        if (d[0] * d[0] + d[1] * d[1]).sqrt() > 0.25 {
+            let want = (-d[0]).atan2(d[1]).to_degrees() as f32;
+            let diff = (want - self.yaw + 540.0).rem_euclid(360.0) - 180.0;
+            self.yaw += diff.clamp(-TURN_PER_TICK, TURN_PER_TICK);
         }
         self.keys.insert(KeyCode::KeyW);
         if g.sprint {
             self.keys.insert(KeyCode::ControlLeft);
         }
         // Step up onto the next block, or out of water.
-        let in_water = {
-            let b = p.map(|v| v.floor() as i32);
-            self.res
-                .facts()
-                .get(self.world.block(b[0], b[1], b[2]))
-                .fluid
-                != horizon_client::blocks::Fluid::None
-        };
         if aim[1] > p[1] + 0.5 && horizontal(p, aim) < 1.6 && on_ground {
             g.jump_until = self.ticks + 4;
         }
