@@ -1165,6 +1165,9 @@ impl Game<'_> {
                 let total = found.len();
                 ok(json!({
                     "block": want,
+                    // False for an id that is no block of the game (oak, not oak_log): a count of 0 then
+                    // means a typo, not that none is in range.
+                    "known": self.pack.assets.registry.default_state(&want).is_some(),
                     "count": total,
                     "nearest": found.iter().take(16).map(|(d, p)| json!({ "pos": p, "distance": d })).collect::<Vec<_>>(),
                 }))
