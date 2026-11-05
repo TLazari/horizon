@@ -891,7 +891,18 @@ impl Game<'_> {
                         .get(self.world.block(m[0], m[1], m[2]))
                         .fluid
                         != horizon_client::blocks::Fluid::None;
-                    let step = 10 + if dy != 0 { 5 } else { 0 } + if water { 30 } else { 0 };
+                    // A head under water burns air (V27g drowned walking a route along the bottom): such
+                    // a step costs far more than one swimming at the surface, so a route avoids it.
+                    let submerged = self
+                        .res
+                        .facts()
+                        .get(self.world.block(m[0], m[1] + 1, m[2]))
+                        .fluid
+                        != horizon_client::blocks::Fluid::None;
+                    let step = 10
+                        + if dy != 0 { 5 } else { 0 }
+                        + if water { 30 } else { 0 }
+                        + if submerged { 90 } else { 0 };
                     let c = base + step;
                     if cost.get(&m).is_none_or(|&old| c < old) {
                         cost.insert(m, c);
