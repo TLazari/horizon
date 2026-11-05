@@ -1169,6 +1169,12 @@ impl Game<'_> {
                     "nearest": found.iter().take(16).map(|(d, p)| json!({ "pos": p, "distance": d })).collect::<Vec<_>>(),
                 }))
             }
+            "entity-type" => {
+                // Whether ID is an entity type of the game (a mob), as `EntityType.byString`.
+                self.load_entity_types();
+                let id = namespaced(a.get(0, "ID")?);
+                ok(json!({ "id": id, "exists": self.entity_type_exists(&id) }))
+            }
             "inventory" => {
                 self.need_world()?;
                 ok(self.inventory_value())
