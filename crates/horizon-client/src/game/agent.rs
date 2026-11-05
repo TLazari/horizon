@@ -211,6 +211,13 @@ fn delta(before: &BTreeMap<String, i64>, after: &BTreeMap<String, i64>) -> BTree
 /// A feet position the A* path walks through.
 type Node = [i32; 3];
 
+/// Fences, walls and fence gates are 1.5 blocks tall: a jump does not reach
+/// their top, so a path must not step onto one (the agent jumped at a fence
+/// forever).
+fn too_tall_to_step_on(name: &str) -> bool {
+    name.ends_with("_fence") || name.ends_with("_wall") || name.ends_with("_fence_gate")
+}
+
 /// Doors, fence gates and trapdoors a hand opens: all but the iron ones,
 /// which take redstone.
 fn opens_by_hand(name: &str) -> bool {
@@ -811,6 +818,7 @@ impl Game<'_> {
                 == "minecraft:lava"
         };
         self.world.chunks.contains_key(&(n[0] >> 4, n[2] >> 4))
+            && !too_tall_to_step_on(&self.res.facts().get(below).name)
             && (self.blocks_motion([n[0], n[1] - 1, n[2]])
                 || self.res.facts().get(below).fluid != horizon_client::blocks::Fluid::None)
             && !self.blocks_body(n)
@@ -2282,6 +2290,16 @@ mod tests {
         assert!((yaw - 90.0).abs() < 1e-4);
         let (_, pitch) = yaw_pitch([0.0; 3], [0.0, -1.0, 0.0]);
         assert!((pitch - 90.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn fences_and_walls_are_not_steps() {
+        for name in ["minecraft:oak_fence", "minecraft:cobblestone_wall", "minecraft:oak_fence_gate"] {
+            assert!(too_tall_to_step_on(name), "{name}");
+        }
+        for name in ["minecraft:stone", "minecraft:oak_slab", "minecraft:oak_stairs"] {
+            assert!(!too_tall_to_step_on(name), "{name}");
+        }
     }
 
     #[test]
